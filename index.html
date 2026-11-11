@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ریاضی در نانوایی خرگوش</title>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ===== رنگ‌ها: برای تغییر ظاهر بازی اینجا را عوض کنید ===== */
+  :root {
+    --bg:#fff1e6; --card:#fff; --ink:#4a2c2a; --pink:#ff8fab; --mint:#7bd9b0; --sun:#ffc94d; --berry:#d6336c;
+    box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#3a2530; --card:#4d3340; --ink:#ffeef2; } }
+  html,body { margin:0; }
+  body { background:var(--bg); color:var(--ink); font-family:"Vazirmatn",Tahoma,sans-serif; min-height:100vh; display:flex; justify-content:center; padding:16px; }
+  #game { width:100%; max-width:580px; text-align:center; }
+  .card { background:var(--card); border-radius:28px; padding:20px; border:4px solid var(--pink); margin-top:12px; }
+  h1 { font-size:2rem; margin:6px 0; color:var(--berry); }
+  .big { font-size:5rem; line-height:1.1; }
+  button { font:inherit; font-size:1.3rem; font-weight:700; color:var(--ink); background:var(--sun); border:3px solid var(--ink); border-radius:18px; padding:10px 22px; margin:6px; cursor:pointer; }
+  button:focus-visible { outline:4px solid var(--berry); }
+  button:disabled { opacity:.6; cursor:default; }
+  .answer { min-width:80px; background:var(--mint); }
+  .answer.right { background:#9be564; }
+  .answer.wrong { background:#ffb3b3; animation:shake .3s; }
+  @keyframes shake { 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+  @media (prefers-reduced-motion: reduce) { .answer.wrong { animation:none; } }
+  .treats { font-size:2rem; line-height:1.3; min-height:60px; word-break:break-all; }
+  .bar { height:18px; background:#ffd9e2; border-radius:9px; overflow:hidden; }
+  .bar div { height:100%; background:var(--berry); }
+  .hearts { font-size:1.6rem; min-height:2.2rem; }
+  .question { font-size:1.8rem; font-weight:800; margin:8px 0; }
+  .msg { min-height:2rem; font-size:1.2rem; font-weight:700; }
+  table { margin:10px auto; font-size:1.2rem; border-collapse:collapse; }
+  td { padding:6px 12px; border-bottom:2px dashed var(--pink); }
+  /* ----- بخش کشیدن و رها کردن ----- */
+  .basket, .plate { border-radius:20px; padding:10px; display:flex; flex-wrap:wrap; gap:6px; justify-content:center; align-items:center; }
+  .basket { background:#ffe8a3; border:3px solid #e0a800; color:#4a2c2a; }
+  .plate { background:#e8fff4; border:4px dashed var(--mint); min-height:110px; margin-top:10px; color:#4a2c2a; }
+  .src, .put { font-size:2.4rem; line-height:1; cursor:grab; touch-action:none; user-select:none; }
+  .put { cursor:pointer; }
+  .ghost { position:fixed; font-size:2.8rem; pointer-events:none; transform:translate(-50%,-50%); z-index:99; }
+  .hint { font-size:1.05rem; opacity:.85; }
+</style>
+</head>
+<body>
+<main id="game" aria-live="polite"></main>
+
+<script>
+/* =====================================================
+   ریاضی در نانوایی خرگوش — طرز کار بازی
+   ۱. LEVELS: فهرست مرحله‌ها (نام، شکل خوراکی، نوع سوال)
+   ۲. makeQuestion(): برای هر مرحله یک سوال تصادفی می‌سازد
+   ۳. توابع show...: صفحه‌ها را می‌کشند (شروع، سوال، نتیجه نهایی)
+   ۴. state: مرحله، شماره سوال، قلب‌ها و اشتباه‌ها را به خاطر می‌سپارد
+   ===================================================== */
+
+// ---------- ۱. مرحله‌ها ----------
+// type: count=شمردن، drag=کشیدن و رها کردن، add=جمع، sub=تفریق، mul=ضرب، story=مسئله کلامی
+// سوال‌های drag هر بار یکی از جفت‌های DRAG_ITEMS را به‌طور تصادفی می‌گیرند
+const LEVELS = [
+  { name:"کیک‌ها را بشمار",     treat:"🧁", type:"count", max:20 },
+  { name:"به حیوان‌ها غذا بده!",  treat:"🧺", type:"drag",  max:5 },
+  { name:"جمع کردن کلوچه‌ها",    treat:"🍪", type:"add",   max:20 },
+  { name:"سفره‌ی بزرگ!",         treat:"🍽️", type:"drag",  max:10 },
+  { name:"خوردن دونات‌ها (−)",   treat:"🍩", type:"sub",   max:20 },
+  { name:"جمع‌های بزرگ‌تر",      treat:"🥐", type:"add",   max:100 },
+  { name:"گروه‌های کیک (×)",     treat:"🎂", type:"mul",   max:5 },
+  { name:"قصه‌های خرگوش",        treat:"🥕", type:"story", max:20 }
+];
+const QUESTIONS_PER_LEVEL = 4;  // تعداد سوال در هر مرحله
+
+// ----- جفت‌های خلاقانه برای سوال‌های کشیدنی -----
+// who = کسی که غذا می‌خواهد، animal = شکل او، emoji = غذا، word = اسم غذا
+// برای اضافه کردن جفت جدید فقط یک خط مثل خط‌های زیر اضافه کنید
+const DRAG_ITEMS = [
+  { who:"خرگوش",    animal:"🐰", emoji:"🥕", word:"هویج" },
+  { who:"میمون",    animal:"🐵", emoji:"🍌", word:"موز" },
+  { who:"موش",      animal:"🐭", emoji:"🧀", word:"تکه پنیر" },
+  { who:"سگ",       animal:"🐶", emoji:"🦴", word:"استخوان" },
+  { who:"گربه",     animal:"🐱", emoji:"🐟", word:"ماهی" },
+  { who:"پاندا",    animal:"🐼", emoji:"🎋", word:"شاخه‌ی بامبو" },
+  { who:"سنجاب",    animal:"🐿️", emoji:"🌰", word:"فندق" },
+  { who:"فیل",      animal:"🐘", emoji:"🍉", word:"هندوانه" },
+  { who:"طوطی",     animal:"🦜", emoji:"🍍", word:"آناناس" },
+  { who:"مرغ",      animal:"🐔", emoji:"🌽", word:"دانه‌ی ذرت" },
+  { who:"اسب",      animal:"🐴", emoji:"🍎", word:"سیب" },
+  { who:"خرس",      animal:"🐻", emoji:"🍯", word:"شیشه‌ی عسل" },
+  { who:"آشپز",     animal:"👩‍🍳", emoji:"🍅", word:"گوجه‌فرنگی" },
+  { who:"بچه‌ی گرسنه", animal:"🧒", emoji:"🧅", word:"پیاز" },
+  { who:"لاک‌پشت",  animal:"🐢", emoji:"🥬", word:"برگ کاهو" },
+  { who:"پرنده",    animal:"🐦", emoji:"🍓", word:"توت‌فرنگی" }
+];
+
+// چند شکل مختلف برای نوشتن سوال، تا هر بار فرق کند
+const TEMPLATES = [
+  (it, n) => `${it.who} ${fa(n)} تا ${it.word} می‌خواهد. به او بده!`,
+  (it, n) => `کمک کن! ${it.who} گرسنه است و ${fa(n)} تا ${it.word} می‌خواهد.`,
+  (it, n) => `${it.who} می‌گوید: «لطفاً ${fa(n)} تا ${it.word} به من بده!»`
+];
+const START_LIVES = 3;          // تعداد قلب‌ها در هر مرحله
+
+// ---------- ۴. حافظه بازی ----------
+let state;
+const game = document.getElementById("game");
+const rnd = (a,b) => Math.floor(Math.random()*(b-a+1))+a;                        // عدد تصادفی بین a و b
+const fa = n => String(n).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]);                 // تبدیل به عدد فارسی
+const hearts = () => "❤️".repeat(state.lives) + "🤍".repeat(START_LIVES-state.lives);
+
+function newGame() {
+  state = { level:0, q:0, lives:START_LIVES, mistakes:0, perLevel:[], current:null, levelStars:0, placed:0 };
+  showLevelIntro();
+}
+
+// ---------- ۲. ساخت سوال ----------
+function makeQuestion(L) {
+  let text, answer, treats = "", item = null;
+  const t = L.treat;
+  if (L.type === "drag") {
+    answer = rnd(1, L.max);
+    item = DRAG_ITEMS[rnd(0, DRAG_ITEMS.length-1)];          // یک جفت تصادفی (مثلاً خرگوش و هویج)
+    text = TEMPLATES[rnd(0, TEMPLATES.length-1)](item, answer);  // یک جمله‌ی تصادفی می‌سازد
+  } else if (L.type === "count") {
+    answer = rnd(3, L.max); text = "چندتا هست؟"; treats = t.repeat(answer);
+  } else if (L.type === "add") {
+    const a = rnd(1, L.max/2), b = rnd(1, L.max/2);
+    answer = a+b; text = `<span dir="ltr">${fa(a)} + ${fa(b)} = ؟</span>`;
+    if (L.max <= 20) treats = t.repeat(a) + " ➕ " + t.repeat(b);   // عددهای بزرگ تصویر ندارند
+  } else if (L.type === "sub") {
+    const a = rnd(5, L.max), b = rnd(1, a-1);
+    answer = a-b; text = `<span dir="ltr">${fa(a)} − ${fa(b)} = ؟</span>`;
+    treats = t.repeat(a) + `  (${fa(b)} تا بخور!)`;
+  } else if (L.type === "mul") {
+    const a = rnd(2, L.max), b = rnd(2, 5);
+    answer = a*b; text = `<span dir="ltr">${fa(a)} × ${fa(b)} = ؟</span>`;
+    treats = (t.repeat(b)+" ").repeat(a);                            // a گروه b تایی
+  } else {
+    const a = rnd(3,12), b = rnd(2,8);
+    if (Math.random() < .5) { answer = a+b; text = `خرگوش ${fa(a)} تا هویج داشت. دوستش ${fa(b)} تا دیگر به او داد. حالا چندتا دارد؟`; }
+    else { answer = a; text = `خرگوش ${fa(a+b)} تا هویج داشت و ${fa(b)} تا را خورد. چندتا باقی ماند؟`; }
+    treats = t.repeat(3);
+  }
+  // سه جواب غلط نزدیک به جواب درست (بدون تکرار و منفی) و بعد مخلوط کردن
+  const options = new Set([answer]);
+  if (L.type !== "drag") while (options.size < 4) { const w = answer + rnd(-4,4); if (w >= 0) options.add(w); }
+  return { text, answer, treats, item, options:[...options].sort(()=>Math.random()-.5) };
+}
+
+// ---------- ۳. صفحه‌ها ----------
+function header() {
+  const done = state.level*QUESTIONS_PER_LEVEL + state.q, total = LEVELS.length*QUESTIONS_PER_LEVEL;
+  return `<div class="bar" aria-hidden="true"><div style="width:${done/total*100}%"></div></div><div class="hearts" id="hearts">${hearts()}</div>`;
+}
+
+function showStart() {
+  game.innerHTML = `<div class="card"><div class="big">🐰</div><h1>ریاضی در نانوایی خرگوش</h1>
+    <p style="font-size:1.2rem">به خرگوش کمک کن شیرینی بپزد!<br>مسئله‌ها را حل کن و ⭐ ستاره بگیر.<br>${fa(LEVELS.length)} مرحله و ${fa(START_LIVES)} قلب برای هر مرحله.</p>
+    <button id="go">بزن بریم!</button></div>`;
+  document.getElementById("go").onclick = newGame;
+}
+
+function showLevelIntro() {
+  const L = LEVELS[state.level];
+  state.q = 0; state.lives = START_LIVES; state.levelStars = 0;
+  game.innerHTML = `<div class="card"><div class="big">${L.treat}</div><h1>مرحله ${fa(state.level+1)}</h1>
+    <p style="font-size:1.4rem">${L.name}</p><button id="go">شروع</button></div>`;
+  document.getElementById("go").onclick = showQuestion;
+}
+
+function showQuestion() {
+  const L = LEVELS[state.level];
+  const c = state.current = makeQuestion(L);
+  state.placed = 0;
+  if (L.type === "drag") {
+    // سوال کشیدنی: سبد پر از میوه (منبع بی‌پایان) + بشقاب + دکمه بررسی
+    game.innerHTML = `<div class="card">${header()}<div style="font-size:4rem">${c.item.animal}</div><div class="question">${c.text}</div>
+      <p class="hint">${c.item.emoji} را بکش و توی بشقاب بینداز، بعد «بررسی» را بزن.<br>برای برداشتن از بشقاب، روی آن بزن.</p>
+      <div class="basket" aria-label="سبد">${`<span class="src">${c.item.emoji}</span>`.repeat(L.max)}</div>
+      <div class="plate" id="plate" aria-label="بشقاب"><span id="empty">🍽️</span></div>
+      <div class="msg" id="count"></div>
+      <button id="check">بررسی ✅</button><button id="clear">پاک کردن</button>
+      <div class="msg" id="msg"></div></div>`;
+    setupDrag(L);
+  } else {
+    game.innerHTML = `<div class="card">${header()}<div class="treats" aria-hidden="true">${c.treats}</div>
+      <div class="question">${c.text}</div>
+      <div>${c.options.map(o=>`<button class="answer" data-v="${o}">${fa(o)}</button>`).join("")}</div>
+      <div class="msg" id="msg"></div></div>`;
+    game.querySelectorAll(".answer").forEach(b => b.onclick = () => checkChoice(b));
+  }
+}
+
+// ---------- کشیدن و رها کردن (با ماوس و لمس) ----------
+function setupDrag(L) {
+  const plate = document.getElementById("plate");
+  const em = state.current.item.emoji;            // شکل غذای این سوال
+  const count = document.getElementById("count");
+  const update = () => { count.textContent = state.placed ? `توی بشقاب: ${fa(state.placed)}` : ""; 
+                         document.getElementById("empty").style.display = state.placed ? "none" : ""; };
+  function addToPlate() {                       // یک میوه به بشقاب اضافه می‌کند
+    const s = document.createElement("span");
+    s.className = "put"; s.textContent = em;
+    s.onclick = () => { s.remove(); state.placed--; update(); };   // کلیک = برداشتن
+    plate.appendChild(s); state.placed++; update();
+  }
+  document.querySelectorAll(".src").forEach(src => {
+    src.onpointerdown = e => {
+      e.preventDefault(); src.setPointerCapture(e.pointerId);
+      const ghost = document.createElement("div");                 // کپی شناور که دنبال انگشت می‌آید
+      ghost.className = "ghost"; ghost.textContent = em; document.body.appendChild(ghost);
+      const move = ev => { ghost.style.left = ev.clientX+"px"; ghost.style.top = ev.clientY+"px"; };
+      move(e); src.onpointermove = move;
+      src.onpointerup = ev => {                                    // رها کردن: آیا روی بشقاب است؟
+        src.onpointermove = src.onpointerup = null; ghost.remove();
+        const r = plate.getBoundingClientRect();
+        if (ev.clientX>=r.left && ev.clientX<=r.right && ev.clientY>=r.top && ev.clientY<=r.bottom) addToPlate();
+      };
+    };
+  });
+  document.getElementById("clear").onclick = () => { plate.querySelectorAll(".put").forEach(p=>p.remove()); state.placed = 0; update(); };
+  document.getElementById("check").onclick = () => {              // دکمه بررسی
+    const ok = state.placed === state.current.answer;
+    const hint = state.placed < state.current.answer ? "کمتر گذاشتی، بیشتر بگذار!" : "بیشتر گذاشتی، یکی دو تا کم کن!";
+    result(ok, ok ? null : hint);
+  };
+}
+
+function checkChoice(btn) {
+  const ok = +btn.dataset.v === state.current.answer;
+  btn.classList.add(ok ? "right" : "wrong"); if (!ok) btn.disabled = true;
+  result(ok, null);
+}
+
+// نتیجه درست/غلط برای هر دو نوع سوال
+function result(ok, hint) {
+  const msg = document.getElementById("msg");
+  const lock = () => game.querySelectorAll("button").forEach(b => b.disabled = true);
+  if (ok) {
+    state.levelStars++; msg.textContent = "🎉 آفرین! درسته!"; lock(); setTimeout(nextQuestion, 1000);
+  } else {
+    state.lives--; state.mistakes++;
+    msg.textContent = (hint || "اشکال نداره، دوباره امتحان کن! 💪");
+    document.getElementById("hearts").textContent = hearts();
+    if (state.lives === 0) {                                       // قلب‌ها تمام شد: جواب را نشان بده و برو جلو
+      msg.textContent = `جواب درست ${fa(state.current.answer)} بود. بریم سراغ بعدی!`;
+      lock(); setTimeout(nextQuestion, 1800);
+    }
+  }
+}
+
+function nextQuestion() {
+  state.q++;
+  if (state.q < QUESTIONS_PER_LEVEL) return showQuestion();
+  state.perLevel.push(state.levelStars);                           // ستاره‌های این مرحله را ذخیره کن
+  state.level++;
+  state.level < LEVELS.length ? showLevelIntro() : showFinal();
+}
+
+// ---------- نتیجه نهایی (بعد از همه مرحله‌ها) ----------
+function showFinal() {
+  const got = state.perLevel.reduce((a,b)=>a+b,0), total = LEVELS.length*QUESTIONS_PER_LEVEL, pct = got/total;
+  const medal = pct>=.9 ? ["🏆","نانوای حرفه‌ای!"] : pct>=.6 ? ["🥈","نانوای ماهر!"] : ["🥉","ستاره‌ی نانوایی!"];
+  const rows = LEVELS.map((L,i)=>`<tr><td>${L.treat} ${L.name}</td><td>${"⭐".repeat(state.perLevel[i])}${"☆".repeat(QUESTIONS_PER_LEVEL-state.perLevel[i])}</td></tr>`).join("");
+  game.innerHTML = `<div class="card"><div class="big">${medal[0]}</div><h1>${medal[1]}</h1>
+    <p style="font-size:1.3rem">از ${fa(total)} سوال، <b>${fa(got)}</b> تا را درست حل کردی!<br>تعداد اشتباه‌ها: ${fa(state.mistakes)}</p>
+    <table>${rows}</table><button id="again">دوباره بازی کن 🔁</button></div>`;
+  document.getElementById("again").onclick = newGame;
+}
+
+showStart();
+</script>
+</body>
+</html>
